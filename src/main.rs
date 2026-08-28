@@ -8,6 +8,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::Instant;
 
+const ZBASE32_RADIX: u128 = 32;
+const ATTEMPT_BATCH_SIZE: usize = 1_000;
+const PROGRESS_PRINT_INTERVAL: usize = 10_000;
+
 fn is_valid_zbase32_char(c: char) -> bool {
     // z-base32 alphabet: ybndrfg8ejkmcpqxot1uwisza345h769
     matches!(
@@ -44,6 +48,45 @@ fn is_valid_zbase32_char(c: char) -> bool {
             | '6'
             | '9'
     )
+}
+
+fn average_attempts_for_prefix(prefix_length: usize) -> f64 {
+    (ZBASE32_RADIX as f64).powf(prefix_length as f64)
+}
+
+fn format_integer_with_separators(value: u128) -> String {
+    let digits = value.to_string();
+    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
+
+    for (index, character) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            formatted.push(',');
+        }
+        formatted.push(character);
+    }
+
+    formatted
+}
+
+fn format_average_attempts(prefix_length: usize) -> String {
+    let exact = u32::try_from(prefix_length)
+        .ok()
+        .and_then(|exponent| ZBASE32_RADIX.checked_pow(exponent));
+
+    match exact {
+        Some(attempts) => format_integer_with_separators(attempts),
+        None => format!("{:.3e}", average_attempts_for_prefix(prefix_length)),
+    }
+}
+
+fn format_percentage_of_average(attempts: usize, average_attempts: f64) -> String {
+    let percentage = attempts as f64 / average_attempts * 100.0;
+
+    if percentage > 0.0 && percentage < 0.01 {
+        format!("{percentage:.2e}%")
+    } else {
+        format!("{percentage:.2}%")
+    }
 }
 
 pub fn get_secret_key_from_keypair(keypair: &Keypair) -> String {
@@ -157,6 +200,9 @@ fn main() {
 
     // Convert to lowercase for case-insensitive matching
     let desired_prefix = trimmed_vanity_name.to_lowercase();
+    let prefix_length = desired_prefix.chars().count();
+    let average_attempts = average_attempts_for_prefix(prefix_length);
+    let formatted_average_attempts = format_average_attempts(prefix_length);
 
     // If the original string had spaces that were trimmed, inform the user
     if raw_vanity_name != trimmed_vanity_name {
@@ -182,6 +228,10 @@ fn main() {
         .unwrap_or("password");
 
     println!("Generating public key with prefix: {}", desired_prefix);
+    println!(
+        "Estimated average work: {} attempts (32^{}); the actual search may finish earlier or later",
+        formatted_average_attempts, prefix_length
+    );
     println!("Using {} threads", num_threads);
     println!(
         "Using passphrase: {}",
@@ -203,6 +253,7 @@ fn main() {
         let desired_prefix_clone = desired_prefix.clone();
         let attempts_clone = Arc::clone(&attempts);
         let found_clone = Arc::clone(&found);
+        let formatted_average_attempts_clone = formatted_average_attempts.clone();
 
         let handle = thread::spawn(move || {
             let thread_id = thread_id;
@@ -219,13 +270,18 @@ fn main() {
                 let lower_pubky = pubky_str.to_lowercase();
 
                 local_attempts += 1;
-                if local_attempts % 1000 == 0 {
-                    attempts_clone.fetch_add(1000, Ordering::Relaxed);
+                if local_attempts % ATTEMPT_BATCH_SIZE == 0 {
+                    attempts_clone.fetch_add(ATTEMPT_BATCH_SIZE, Ordering::Relaxed);
 
                     // Print status update periodically from just one thread
-                    if thread_id == 0 && local_attempts % 10000 == 0 {
+                    if thread_id == 0 && local_attempts % PROGRESS_PRINT_INTERVAL == 0 {
                         let total = attempts_clone.load(Ordering::Relaxed);
-                        println!("Still searching... {} attempts so far", total);
+                        println!(
+                            "Still searching... {} attempts ({} of average: {})",
+                            format_integer_with_separators(total as u128),
+                            format_percentage_of_average(total, average_attempts),
+                            formatted_average_attempts_clone
+                        );
                     }
                 }
 
@@ -234,13 +290,20 @@ fn main() {
                     // Set the found flag to stop other threads
                     found_clone.store(true, Ordering::Relaxed);
 
+                    // Publish the part of this thread's count that was not in a full batch.
+                    attempts_clone
+                        .fetch_add(local_attempts % ATTEMPT_BATCH_SIZE, Ordering::Relaxed);
+
                     // Get the secret key in hex format
                     let secret_key_hex = get_secret_key_from_keypair(&keypair);
 
                     // Return the found keys, recovery phrase, and keypair
-                    return Some((pubky_str, secret_key_hex, mnemonic, keypair, local_attempts));
+                    return Some((pubky_str, secret_key_hex, mnemonic, keypair));
                 }
             }
+
+            // Publish this thread's last partial batch before exiting.
+            attempts_clone.fetch_add(local_attempts % ATTEMPT_BATCH_SIZE, Ordering::Relaxed);
 
             // This thread didn't find a match
             None
@@ -250,24 +313,22 @@ fn main() {
     }
 
     // Wait for results from threads
-    let mut found_thread_attempts = 0;
     let mut result_pubkey = String::new();
     let mut result_secret_key = String::new();
     let mut result_mnemonic = String::new();
     let mut found_keypair: Option<Keypair> = None;
 
     for handle in handles {
-        if let Ok(Some((pubky, secret_key, mnemonic, keypair, thread_attempts))) = handle.join() {
+        if let Ok(Some((pubky, secret_key, mnemonic, keypair))) = handle.join() {
             result_pubkey = pubky;
             result_secret_key = secret_key;
             result_mnemonic = mnemonic;
             found_keypair = Some(keypair);
-            found_thread_attempts = thread_attempts;
         }
     }
 
     // Calculate total attempts and time
-    let total_attempts = attempts.load(Ordering::Relaxed) + found_thread_attempts;
+    let total_attempts = attempts.load(Ordering::Relaxed);
     let elapsed = start_time.elapsed();
 
     if let Some(keypair) = found_keypair {
@@ -329,6 +390,29 @@ mod tests {
                 "unexpected validation result for {character:?}"
             );
         }
+    }
+
+    #[test]
+    fn average_work_is_32_to_the_prefix_length() {
+        assert_eq!(average_attempts_for_prefix(1), 32.0);
+        assert_eq!(average_attempts_for_prefix(3), 32_768.0);
+        assert_eq!(average_attempts_for_prefix(6), 1_073_741_824.0);
+    }
+
+    #[test]
+    fn average_work_is_formatted_for_humans() {
+        assert_eq!(format_average_attempts(1), "32");
+        assert_eq!(format_average_attempts(4), "1,048,576");
+        assert_eq!(format_average_attempts(26), "1.361e39");
+    }
+
+    #[test]
+    fn progress_is_reported_relative_to_average_work() {
+        let average = average_attempts_for_prefix(3);
+
+        assert_eq!(format_percentage_of_average(16_384, average), "50.00%");
+        assert_eq!(format_percentage_of_average(32_768, average), "100.00%");
+        assert_eq!(format_percentage_of_average(1, average), "3.05e-3%");
     }
 
     #[test]

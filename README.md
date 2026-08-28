@@ -57,17 +57,24 @@ Generate a key that starts with "bob" and provide your own passphrase:
 ## Output
 
 The program will display:
+
 1. The prefix it's searching for
-2. The number of threads being used
-3. Regular status updates during the search
-4. When a match is found:
+2. The estimated average work for that prefix
+3. The number of threads being used
+4. Regular status updates showing the attempts made relative to the average
+5. When a match is found:
     - The matching public key
     - The corresponding private key
     - A compatible 12-word recovery phrase
     - Number of attempts required
     - Time elapsed
     - Average search speed (keys/second)
-5. The location of the saved recovery file
+6. The location of the saved recovery file
+
+Each additional prefix character multiplies the average work by 32. A prefix of
+length `n` therefore takes `32^n` attempts on average. This is a statistical
+average, not a completion target: a search can finish much earlier or continue
+past 100% of the average shown in progress updates.
 
 ## Recovery Files
 
