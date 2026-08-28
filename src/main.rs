@@ -1,17 +1,48 @@
-use pubky::{recovery_file, Keypair};
 use clap::{Arg, Command};
+use pubky::{Keypair, recovery_file};
 use std::fs::File;
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::Instant;
 
 fn is_valid_zbase32_char(c: char) -> bool {
     // z-base32 alphabet: ybndrfg8ejkmcpqxot1uwisza345h769
-    matches!(c, 'y' | 'b' | 'n' | 'd' | 'r' | 'f' | 'g' | '8' | 'e' | 'j' | 'k' |
-             'm' | 'c' | 'p' | 'q' | 'x' | 'o' | 't' | '1' | 'u' | 'w' | 'i' |
-             's' | 'z' | 'a' | '3' | '4' | '5' | 'h' | '7' | '6' | '9')
+    matches!(
+        c,
+        'y' | 'b'
+            | 'n'
+            | 'd'
+            | 'r'
+            | 'f'
+            | 'g'
+            | '8'
+            | 'e'
+            | 'j'
+            | 'k'
+            | 'm'
+            | 'c'
+            | 'p'
+            | 'q'
+            | 'x'
+            | 'o'
+            | 't'
+            | '1'
+            | 'u'
+            | 'w'
+            | 'i'
+            | 's'
+            | 'z'
+            | 'a'
+            | '3'
+            | '4'
+            | '5'
+            | 'h'
+            | '7'
+            | '6'
+            | '9'
+    )
 }
 
 pub fn get_secret_key_from_keypair(keypair: &Keypair) -> String {
@@ -19,9 +50,9 @@ pub fn get_secret_key_from_keypair(keypair: &Keypair) -> String {
 }
 
 pub fn get_keypair_from_secret_key(secret_key: &str) -> Result<Keypair, String> {
-    let bytes = match hex::decode(&secret_key) {
+    let bytes = match hex::decode(secret_key) {
         Ok(bytes) => bytes,
-        Err(_) => return Err("Failed to decode secret key".to_string())
+        Err(_) => return Err("Failed to decode secret key".to_string()),
     };
 
     let secret_key_bytes: [u8; 32] = match bytes.try_into() {
@@ -47,28 +78,26 @@ fn main() {
             Arg::new("vanity_name")
                 .help("The desired vanity prefix for the public key")
                 .required(true)
-                .index(1)
+                .index(1),
         )
         .arg(
             Arg::new("threads")
                 .long("threads")
                 .short('t')
                 .help("Number of threads to use (defaults to CPU count)")
-                .value_name("COUNT")
+                .value_name("COUNT"),
         )
         .arg(
             Arg::new("passphrase")
                 .long("passphrase")
                 .short('p')
                 .help("Passphrase for the recovery file (defaults to 'password')")
-                .value_name("PASSPHRASE")
+                .value_name("PASSPHRASE"),
         )
         .get_matches();
 
     // Get the required vanity name
-    let raw_vanity_name = matches
-        .get_one::<String>("vanity_name")
-        .unwrap();
+    let raw_vanity_name = matches.get_one::<String>("vanity_name").unwrap();
 
     // Trim any leading or trailing spaces
     let trimmed_vanity_name = raw_vanity_name.trim();
@@ -92,7 +121,10 @@ fn main() {
         .collect();
 
     if !invalid_chars.is_empty() {
-        eprintln!("Error: Vanity name contains invalid characters: {:?}", invalid_chars);
+        eprintln!(
+            "Error: Vanity name contains invalid characters: {:?}",
+            invalid_chars
+        );
         eprintln!("Valid characters are: ybndrfg8ejkmcpqxot1uwisza345h769");
         eprintln!("Invalid characters that cannot be used: v0l2");
         std::process::exit(1);
@@ -109,11 +141,13 @@ fn main() {
     // Get the optional number of threads with default as CPU count
     let num_threads = matches
         .get_one::<String>("threads")
-        .map(|t| t.parse::<usize>().unwrap_or_else(|_| {
-            eprintln!("Warning: Invalid thread count, using CPU count instead");
-            num_cpus::get()
-        }))
-        .unwrap_or_else(|| num_cpus::get());
+        .map(|t| {
+            t.parse::<usize>().unwrap_or_else(|_| {
+                eprintln!("Warning: Invalid thread count, using CPU count instead");
+                num_cpus::get()
+            })
+        })
+        .unwrap_or_else(num_cpus::get);
 
     // Get the optional passphrase with default as "password"
     let has_passphrase = matches.contains_id("passphrase");
@@ -124,8 +158,14 @@ fn main() {
 
     println!("Generating public key with prefix: {}", desired_prefix);
     println!("Using {} threads", num_threads);
-    println!("Using passphrase: {}",
-             if has_passphrase { "provided" } else { ": default" });
+    println!(
+        "Using passphrase: {}",
+        if has_passphrase {
+            "provided"
+        } else {
+            ": default"
+        }
+    );
 
     // Shared atomic counter for attempts
     let attempts = Arc::new(AtomicUsize::new(0));
@@ -203,12 +243,17 @@ fn main() {
     let elapsed = start_time.elapsed();
 
     if let Some(keypair) = found_keypair {
-        println!("Found matching public key after {} attempts and {:.2} seconds:",
-                 total_attempts, elapsed.as_secs_f64());
+        println!(
+            "Found matching public key after {} attempts and {:.2} seconds:",
+            total_attempts,
+            elapsed.as_secs_f64()
+        );
         println!("Public key: {}", result_pubkey);
         println!("Private key: {}", result_secret_key);
-        println!("Average speed: {:.2} keys/second",
-                 total_attempts as f64 / elapsed.as_secs_f64());
+        println!(
+            "Average speed: {:.2} keys/second",
+            total_attempts as f64 / elapsed.as_secs_f64()
+        );
 
         // Create recovery file with provided or default passphrase
         let recovery_file_bytes = save_recovery_file(&keypair, passphrase);
@@ -216,18 +261,18 @@ fn main() {
         // Save the recovery file
         let filename = format!("{}_pubky_recovery.pkarr", desired_prefix);
         match File::create(&filename) {
-            Ok(mut file) => {
-                match file.write_all(&recovery_file_bytes) {
-                    Ok(_) => println!("Recovery file saved: {} (with {})",
-                                      filename,
-                                      if has_passphrase {
-                                          "provided passphrase"
-                                      } else {
-                                          "default passphrase"
-                                      }),
-                    Err(e) => println!("Failed to write recovery file: {}", e),
-                }
-            }
+            Ok(mut file) => match file.write_all(&recovery_file_bytes) {
+                Ok(_) => println!(
+                    "Recovery file saved: {} (with {})",
+                    filename,
+                    if has_passphrase {
+                        "provided passphrase"
+                    } else {
+                        "default passphrase"
+                    }
+                ),
+                Err(e) => println!("Failed to write recovery file: {}", e),
+            },
             Err(e) => println!("Failed to create recovery file: {}", e),
         }
     } else {
