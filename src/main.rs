@@ -1,3 +1,4 @@
+use bip39::{Language, Mnemonic};
 use clap::{Arg, Command};
 use pubky::{Keypair, recovery_file};
 use std::fs::File;
@@ -63,6 +64,30 @@ pub fn get_keypair_from_secret_key(secret_key: &str) -> Result<Keypair, String> 
     };
 
     Ok(Keypair::from_secret_key(&secret_key_bytes))
+}
+
+fn get_keypair_from_mnemonic(mnemonic: &Mnemonic) -> Keypair {
+    let seed = mnemonic.to_seed("");
+    let secret_key: [u8; 32] = seed[..32]
+        .try_into()
+        .expect("a BIP39 seed always contains at least 32 bytes");
+
+    Keypair::from_secret_key(&secret_key)
+}
+
+pub fn get_keypair_from_mnemonic_phrase(mnemonic_phrase: &str) -> Result<Keypair, String> {
+    let mnemonic = Mnemonic::parse_in(Language::English, mnemonic_phrase)
+        .map_err(|_| "Invalid mnemonic phrase".to_string())?;
+
+    Ok(get_keypair_from_mnemonic(&mnemonic))
+}
+
+pub fn generate_mnemonic_and_keypair() -> Result<(String, Keypair), String> {
+    let mnemonic = Mnemonic::generate_in(Language::English, 12)
+        .map_err(|error| format!("Failed to generate mnemonic: {error}"))?;
+    let keypair = get_keypair_from_mnemonic(&mnemonic);
+
+    Ok((mnemonic.to_string(), keypair))
 }
 
 pub fn save_recovery_file(keypair: &Keypair, passphrase: &str) -> Vec<u8> {
@@ -184,8 +209,9 @@ fn main() {
             let mut local_attempts = 0;
 
             while !found_clone.load(Ordering::Relaxed) {
-                // Generate a random keypair
-                let keypair = Keypair::random();
+                // Generate the keypair from a recovery phrase so Pubky Ring can import it.
+                let (mnemonic, keypair) = generate_mnemonic_and_keypair()
+                    .expect("generating a 12-word English mnemonic should not fail");
                 let pubky = keypair.public_key();
                 let pubky_str = pubky.to_string();
 
@@ -211,8 +237,8 @@ fn main() {
                     // Get the secret key in hex format
                     let secret_key_hex = get_secret_key_from_keypair(&keypair);
 
-                    // Return the found keys and keypair
-                    return Some((pubky_str, secret_key_hex, keypair, local_attempts));
+                    // Return the found keys, recovery phrase, and keypair
+                    return Some((pubky_str, secret_key_hex, mnemonic, keypair, local_attempts));
                 }
             }
 
@@ -227,12 +253,14 @@ fn main() {
     let mut found_thread_attempts = 0;
     let mut result_pubkey = String::new();
     let mut result_secret_key = String::new();
+    let mut result_mnemonic = String::new();
     let mut found_keypair: Option<Keypair> = None;
 
     for handle in handles {
-        if let Ok(Some((pubky, secret_key, keypair, thread_attempts))) = handle.join() {
+        if let Ok(Some((pubky, secret_key, mnemonic, keypair, thread_attempts))) = handle.join() {
             result_pubkey = pubky;
             result_secret_key = secret_key;
+            result_mnemonic = mnemonic;
             found_keypair = Some(keypair);
             found_thread_attempts = thread_attempts;
         }
@@ -250,6 +278,7 @@ fn main() {
         );
         println!("Public key: {}", result_pubkey);
         println!("Private key: {}", result_secret_key);
+        println!("Recovery phrase: {}", result_mnemonic);
         println!(
             "Average speed: {:.2} keys/second",
             total_attempts as f64 / elapsed.as_secs_f64()
@@ -339,6 +368,39 @@ mod tests {
                 "Failed to convert secret key to 32-byte array"
             );
         }
+    }
+
+    #[test]
+    fn pubky_ring_mnemonic_derivation_matches_known_vector() {
+        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let keypair = get_keypair_from_mnemonic_phrase(mnemonic).expect("valid BIP39 mnemonic");
+
+        assert_eq!(
+            get_secret_key_from_keypair(&keypair),
+            "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc1"
+        );
+    }
+
+    #[test]
+    fn mnemonic_rejects_invalid_checksum() {
+        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon";
+
+        assert_eq!(
+            get_keypair_from_mnemonic_phrase(mnemonic).unwrap_err(),
+            "Invalid mnemonic phrase"
+        );
+    }
+
+    #[test]
+    fn generated_mnemonic_recovers_generated_keypair() {
+        let (mnemonic, original) =
+            generate_mnemonic_and_keypair().expect("mnemonic generation should succeed");
+        let recovered =
+            get_keypair_from_mnemonic_phrase(&mnemonic).expect("generated mnemonic should parse");
+
+        assert_eq!(mnemonic.split_whitespace().count(), 12);
+        assert_eq!(recovered.secret_key(), original.secret_key());
+        assert_eq!(recovered.public_key(), original.public_key());
     }
 
     #[test]

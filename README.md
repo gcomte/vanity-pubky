@@ -6,19 +6,19 @@ A tool for generating pubkys with custom prefixes.
 
 This tool allows you to create a vanity pubky that begins with a specific string of your choice. For example, you might want a public key that starts with your name or a meaningful word.
 
-When a matching key is found, the program automatically creates an encrypted recovery file that can be used to import and access your new vanity pubky.
+Every candidate key is derived from a 12-word English BIP39 recovery phrase in the same way as Pubky Ring. When a match is found, the program prints that phrase and also creates an encrypted recovery file.
 
 ### Single line usage
 Just replace [PREFIX] with the desired prefix and [PASSPHRASE] with the desired passphrase.
 ```bash
-git clone https://github.com/coreyphillips/vanity-pubky && cd vanity-pubky && cargo build --release && ./target/release/vanity-pubky [PREFIX] --passphrase [PASSPHRASE]
+git clone https://github.com/gcomte/vanity-pubky && cd vanity-pubky && cargo build --release && ./target/release/vanity-pubky [PREFIX] --passphrase [PASSPHRASE]
 ```
 
 ### Building from Source
 
 1. Clone this repository or download the source code:
    ```bash
-   git clone https://github.com/coreyphillips/vanity-pubky
+   git clone https://github.com/gcomte/vanity-pubky
     ```
 2. Navigate to the project directory:
    ```bash
@@ -28,14 +28,14 @@ git clone https://github.com/coreyphillips/vanity-pubky && cd vanity-pubky && ca
    ```bash
    cargo build --release
    ```
-4. The executable will be available at `target/release/vanity_pubky` (or `target/release/vanity_pubky.exe` on Windows)
+4. The executable will be available at `target/release/vanity-pubky` (or `target/release/vanity-pubky.exe` on Windows)
 
 ## Usage
 
 Run the program with the following command:
 
 ```
-./vanity_pubky [PREFIX] --passphrase [PASSPHRASE]
+./vanity-pubky [PREFIX] --passphrase [PASSPHRASE]
 ```
 
 Where:
@@ -46,12 +46,12 @@ Where:
 
 Generate a key that starts with "bob":
 ```
-./vanity_pubky bob
+./vanity-pubky bob
 ```
 
 Generate a key that starts with "bob" and provide your own passphrase:
 ```
-./vanity_pubky bob --passphrase my_passphrase
+./vanity-pubky bob --passphrase my_passphrase
 ```
 
 ## Output
@@ -63,6 +63,7 @@ The program will display:
 4. When a match is found:
     - The matching public key
     - The corresponding private key
+    - A compatible 12-word recovery phrase
     - Number of attempts required
     - Time elapsed
     - Average search speed (keys/second)
@@ -76,6 +77,14 @@ PREFIX_pubky_recovery.pkarr
 ```
 
 This file is encrypted with the passphrase "password" unless another passphrase was specified.
+
+## Recovery Phrases
+
+The displayed recovery phrase is compatible with Pubky Ring: its standard BIP39 seed is derived with an empty BIP39 passphrase, and the first 32 bytes form the Pubky secret key. The `--passphrase` option only encrypts the `.pkarr` recovery file; it does not alter the 12-word phrase.
+
+Keep the phrase private and store it securely. Anyone who has it controls the Pubky. The phrase is printed to the terminal but is not written to an unencrypted file.
+
+Deriving each vanity candidate through BIP39 is intentionally more expensive than generating an arbitrary random key, so searches will be slower than in earlier releases.
 
 ## Building for Different Platforms
 
