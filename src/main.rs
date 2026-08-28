@@ -279,3 +279,85 @@ fn main() {
         println!("No matching key found. This shouldn't happen!");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ZBASE32_ALPHABET: &str = "ybndrfg8ejkmcpqxot1uwisza345h769";
+
+    fn deterministic_keypair() -> Keypair {
+        let secret_key = std::array::from_fn(|index| index as u8);
+        Keypair::from_secret_key(&secret_key)
+    }
+
+    #[test]
+    fn accepts_exact_zbase32_alphabet() {
+        for character in '!'..='~' {
+            assert_eq!(
+                is_valid_zbase32_char(character),
+                ZBASE32_ALPHABET.contains(character),
+                "unexpected validation result for {character:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn secret_key_is_lowercase_hex() {
+        let secret_key = get_secret_key_from_keypair(&deterministic_keypair());
+
+        assert_eq!(
+            secret_key,
+            "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+        );
+    }
+
+    #[test]
+    fn secret_key_round_trip_preserves_keypair() {
+        let original = deterministic_keypair();
+        let encoded = get_secret_key_from_keypair(&original);
+        let decoded = get_keypair_from_secret_key(&encoded).expect("valid secret key");
+
+        assert_eq!(decoded.secret_key(), original.secret_key());
+        assert_eq!(decoded.public_key(), original.public_key());
+    }
+
+    #[test]
+    fn secret_key_rejects_non_hex_input() {
+        assert_eq!(
+            get_keypair_from_secret_key("not-a-secret-key").unwrap_err(),
+            "Failed to decode secret key"
+        );
+    }
+
+    #[test]
+    fn secret_key_rejects_incorrect_lengths() {
+        for length in [31, 33] {
+            let encoded = hex::encode(vec![0_u8; length]);
+            assert_eq!(
+                get_keypair_from_secret_key(&encoded).unwrap_err(),
+                "Failed to convert secret key to 32-byte array"
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_file_round_trip_preserves_keypair() {
+        let original = deterministic_keypair();
+        let recovery_file = save_recovery_file(&original, "correct horse battery staple");
+        let recovered =
+            recovery_file::decrypt_recovery_file(&recovery_file, "correct horse battery staple")
+                .expect("recovery file should decrypt");
+
+        assert!(recovery_file.starts_with(b"pubky.org/recovery\n"));
+        assert_eq!(recovered.secret_key(), original.secret_key());
+        assert_eq!(recovered.public_key(), original.public_key());
+    }
+
+    #[test]
+    fn recovery_file_rejects_wrong_passphrase() {
+        let recovery_file = save_recovery_file(&deterministic_keypair(), "right passphrase");
+
+        assert!(recovery_file::decrypt_recovery_file(&recovery_file, "wrong passphrase").is_err());
+    }
+}
